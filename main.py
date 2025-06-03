@@ -24,7 +24,7 @@ def load_css(file_path):
         st.markdown(f"<style>{f.read()}</style>", unsafe_allow_html=True)
 
 # Define the correct path to the CSS file
-css_file = pathlib.Path(r"C:\Users\bokis\OneDrive\Dokumen\School\Codes\main\assets\style.css")
+css_file = pathlib.Path(r"style.css")
 
 # Load the external CSS
 load_css(css_file)
