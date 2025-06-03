@@ -3,7 +3,7 @@ import pathlib
 import base64
 
 # Background Image
-with open("assets/bg.png", "rb") as file:
+with open("bg.png", "rb") as file:
     encoded = base64.b64encode(file.read()).decode()
     st.markdown(
         f"""
