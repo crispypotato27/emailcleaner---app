@@ -1,0 +1,37 @@
+div{
+    color: black;
+}
+.st-key-email{
+    border: 2px solid black;
+    border-radius: 10px;
+}
+.st-key-password{
+    border: 2px solid black;
+    border-radius: 10px;
+}
+.st-key-login button{
+    background-color: #e8ca53;
+    border-radius: 10px;
+    text-align: center;
+    padding: 5px 140px;
+
+}
+.st-key-login button p {
+    font-size: 24px;
+    color: white;
+    background-color: e8ca53;
+    border-radius: 10px;
+}
+.login-title {
+    margin-top: 9rem;
+    font-weight: 700;
+    font-size: 2rem;
+    text-align: center;
+    margin-bottom: 1rem;
+}
+.left-column{
+    margin-top: 9rem;
+}
+.tutorial a {
+    color: yellow;
+}
