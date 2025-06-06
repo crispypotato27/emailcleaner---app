@@ -1,6 +1,16 @@
 div{
     color: black;
 }
+.stApp > div {
+    max-width: 900px;
+    margin: auto;
+    padding: 2rem;
+    
+}
+
+footer, .stDeployButton, #MainMenu {
+    visibility: hidden !important;
+}
 .st-key-email{
     border: 2px solid black;
     border-radius: 10px;
@@ -12,16 +22,16 @@ div{
 .st-key-login button{
     background-color: #e8ca53;
     border-radius: 10px;
+    color: white;                
+    font-size: 20px;               
+    font-weight: 600;
+    padding: 12px 0;               
+    width: 100%;                   
     text-align: center;
-    padding: 5px 140px;
+    border: none;
 
 }
-.st-key-login button p {
-    font-size: 24px;
-    color: white;
-    background-color: e8ca53;
-    border-radius: 10px;
-}
+
 .login-title {
     margin-top: 5rem;
     font-weight: 700;
