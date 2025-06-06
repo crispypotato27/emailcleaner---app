@@ -3,6 +3,13 @@ import pathlib
 import base64
 import imaplib
 
+# sets as login page
+st.set_page_config(
+    page_title="Login page",
+    layout="wide",
+    initial_sidebar_state="collapsed"
+)
+
 # Background Image
 with open("bg.png", "rb") as file:
     encoded = base64.b64encode(file.read()).decode()
@@ -41,7 +48,7 @@ with col1:
 with col2:
     st.markdown('<div class="right-column">', unsafe_allow_html=True)
     st.markdown('<div class="login-title">Login</div>', unsafe_allow_html=True)
-    email = st.text_input("Email", label_visibility="collapsed", placeholder="Email", key="email")
+    email = st.text_input("Email", label_visibility="collapsed", placeholder="Email", key="email_input")
     password = st.text_input("Password", label_visibility="collapsed", placeholder="App password (16 Characters)",key="password", type="password")
     login = st.button("Log in", key="login")
 
@@ -52,7 +59,11 @@ with col2:
                 mail = imaplib.IMAP4_SSL('imap.gmail.com')
                 mail.login(email, password)
                 st.success("Login successful!")
-                # Here you can add more functionality like fetching emails, etc.
+                st.session_state.logged_in = True
+                st.session_state.email = email
+                st.session_state.app_password = password
+                st.success(f"Logged in as {email}!")
+                st.switch_page("pages/dashboard.py")
             except imaplib.IMAP4.error as e:
                 st.error(f"Login failed: {e}")
         else:
@@ -65,6 +76,5 @@ with col2:
     """, unsafe_allow_html=True)
     st.markdown('</div>', unsafe_allow_html=True)
     
-
 
 
