@@ -70,6 +70,48 @@ div{
     margin-top: 6rem;
     margin-left: 2rem;
 }
-.tutorial a {
-    color: rgb(193, 193, 13);
+.tutorial a { 
+    color: #BA8E23;
+}
+
+.st-key-email_input {
+    margin-top: 1rem;
+    margin-left: 3rem;
+}
+
+.st-key-password {
+    margin-top: 0.5rem;
+    margin-left: 3rem; 
+}
+
+.st-key-login {
+    margin-top: 0.5rem;
+    margin-left: 3rem; 
+}
+
+.tutorial{
+    margin-left: 3.5rem;
+}
+
+.login-title {
+    padding-top: 2.5rem;
+    margin-left: 3rem; 
+    font-size: 3rem;
+}
+
+.left-column {
+    padding-top: 3.7rem;  
+}
+
+.st-emotion-cache-seewz2 p {
+    margin-left: 3rem;
+}
+
+.st-emotion-cache-1sdpuyj strong {
+    transform: translateX(10rem);
+}
+
+
+.st-emotion-cache-1sdpuyj h1 {
+    transform: translateX(2rem);
 }
