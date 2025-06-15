@@ -55,7 +55,7 @@ def run_scheduled_cleanups():
 
     configs = load_all_schedules()
     for config in configs:
-        if not config.get("enabled", True):  # 👈 Skip if disabled or missing
+        if not config.get("enabled", False):  # 👈 Skip if disabled or missing
             print(f"🚫 Skipping {config['email']} – schedule disabled.")
             continue
 
