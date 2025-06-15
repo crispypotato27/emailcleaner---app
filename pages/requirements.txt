@@ -1,8 +1,0 @@
-streamlit
-imaplib2
-beautifulsoup4
-pytz
-schedule
-google-auth
-oauth2client
-gspread
