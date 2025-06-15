@@ -1,15 +1,15 @@
 import streamlit as st
+import imaplib
+from util import handle_login
 
 st.set_page_config(
     page_title="Login page",
-    #layout="wide",
     initial_sidebar_state="collapsed"
 )
 
-from util import load_css, background, handle_login
+from util import load_css, background, save_session
+load_css("assets/style.css")
 
-if st.session_state.get("logged_in"):
-    st.switch_page("pages/Dashboard.py")
 
 # Background image
 background("assets/bg.png")
