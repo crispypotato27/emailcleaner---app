@@ -1,0 +1,5 @@
+streamlit
+schedule
+pytz
+beautifulsoup4
+oauth2client
