@@ -8,17 +8,14 @@ from datetime import datetime, timedelta
 import re
 import pytz
 
-# Assuming get_imap_connection is available from util.py
-from util import get_imap_connection
-
-def create_connection_for_thread(email_address, password, imap_server):
+def create_connection(email_address, password, imap_server):
     try:
         context = ssl.create_default_context()
         mail = imaplib.IMAP4_SSL(imap_server, 993, ssl_context=context)
         mail.login(email_address, password)
         return mail
     except Exception as e:
-        print(f"Connection failed in thread: {e}")
+        print(f"Connection failed: {e}")
         return None
 
 def decode_mime_words(s):
@@ -61,6 +58,7 @@ def get_email_info_batch(mail_conn, msg_ids, cutoff_date=None):
         typ, msg_data = mail_conn.fetch(msg_set, '(UID BODY.PEEK[HEADER.FIELDS (FROM SUBJECT DATE MESSAGE-ID)])')
 
         if typ != 'OK' or not msg_data:
+            print(f"Fetch failed or empty: {typ}, {msg_data}")
             return []
 
         for i in range(0, len(msg_data)):
@@ -92,15 +90,16 @@ def get_email_info_batch(mail_conn, msg_ids, cutoff_date=None):
                 })
 
             except Exception as e:
+                print(f"Error processing item: {item} — {e}")
                 continue
 
     except Exception as e:
-        pass
+        print(f"Batch processing error: {e}")
     return emails
 
 def process_chunk(args):
     chunk, folder, email_address, password, imap_server, cutoff_date = args
-    mail_conn = create_connection_for_thread(email_address, password, imap_server)
+    mail_conn = create_connection(email_address, password, imap_server)
     if not mail_conn:
         return []
     try:
@@ -113,12 +112,9 @@ def process_chunk(args):
         except:
             pass
 
-def scan_folder_fast(folder_name, email_address, password, imap_server, days_back=None):
-    mail_for_search = create_connection_for_thread(email_address, password, imap_server)
-    if not mail_for_search:
-        return []
+def scan_folder_fast(mail, folder_name, email_address, password, imap_server, days_back=None):
     try:
-        status, _ = mail_for_search.select(folder_name)
+        status, _ = mail.select(folder_name)
         if status != 'OK':
             return []
 
@@ -127,7 +123,7 @@ def scan_folder_fast(folder_name, email_address, password, imap_server, days_bac
             pst = pytz.timezone('Asia/Manila')
             cutoff_date = datetime.now(pst) - timedelta(days=days_back)
 
-        _, msg_ids = mail_for_search.search(None, 'ALL')
+        _, msg_ids = mail.search(None, 'ALL')
         msg_id_list = msg_ids[0].split()
         if not msg_id_list:
             return []
@@ -150,24 +146,15 @@ def scan_folder_fast(folder_name, email_address, password, imap_server, days_bac
     except Exception as e:
         print(f"Error scanning {folder_name}: {e}")
         return []
-    finally:
-        try:
-            mail_for_search.close()
-            mail_for_search.logout()
-        except:
-            pass
 
-def scan_unread_fast(email_address, password, imap_server, cutoff_date=None):
-    mail_for_search = create_connection_for_thread(email_address, password, imap_server)
-    if not mail_for_search:
-        return [], 0
+def scan_unread_fast(mail, email_address, password, imap_server, cutoff_date=None):
     try:
-        mail_for_search.select('INBOX')
+        mail.select('INBOX')
         search_criteria = 'UNSEEN'
         if cutoff_date:
             date_str = cutoff_date.strftime('%d-%b-%Y')
             search_criteria = f'(UNSEEN SINCE "{date_str}")'
-        _, msg_ids = mail_for_search.search(None, search_criteria)
+        _, msg_ids = mail.search(None, search_criteria)
         if not msg_ids[0]:
             return [], 0
 
@@ -192,12 +179,6 @@ def scan_unread_fast(email_address, password, imap_server, cutoff_date=None):
     except Exception as e:
         print(f"Error scanning unread emails: {e}")
         return [], 0
-    finally:
-        try:
-            mail_for_search.close()
-            mail_for_search.logout()
-        except:
-            pass
 
 def get_folder_list(mail):
     try:
@@ -209,13 +190,13 @@ def get_folder_list(mail):
 
 def scan_all_fast(email_address, password, imap_server, days_back=None):
     start_time = time.time()
-    mail_main_thread = get_imap_connection()
-    if not mail_main_thread:
+    mail = create_connection(email_address, password, imap_server)
+    if not mail:
         return None
 
     try:
         results = {
-            'unread': [], 'spam': [], 'trash': [], 'folders': [], # Removed 'junk'
+            'unread': [], 'spam': [], 'junk': [], 'trash': [], 'folders': [],
             'total_unread_count': 0, 'scan_time': 0
         }
 
@@ -224,18 +205,21 @@ def scan_all_fast(email_address, password, imap_server, days_back=None):
             pst = pytz.timezone('Asia/Manila')
             cutoff_date = datetime.now(pst) - timedelta(days=days_back)
 
-        results['folders'] = get_folder_list(mail_main_thread)
+        results['folders'] = get_folder_list(mail)
         results['unread'], results['total_unread_count'] = scan_unread_fast(
-            email_address, password, imap_server, cutoff_date
+            mail, email_address, password, imap_server, cutoff_date
         )
 
-        # Consolidate Spam and Junk folder scanning into 'spam'
-        spam_and_junk_folders = ['Spam', 'Junk', 'SPAM', 'JUNK', '[Gmail]/Spam', 'Bulk Mail', 'Spam E-mail'] # Added common junk names
+        spam_folders = ['Spam', 'Junk', 'SPAM', 'JUNK', '[Gmail]/Spam', 'Bulk Mail']
         for folder in results['folders']:
-            if any(target_folder.lower() == folder.lower() for target_folder in spam_and_junk_folders):
-                emails = scan_folder_fast(folder, email_address, password, imap_server, days_back)
-                results['spam'].extend(emails) # All found in these folders go to 'spam'
+            if any(spam_folder.lower() == folder.lower() for spam_folder in spam_folders):
+                emails = scan_folder_fast(mail, folder, email_address, password, imap_server, days_back)
+                if 'spam' in folder.lower():
+                    results['spam'].extend(emails)
+                else:
+                    results['junk'].extend(emails)
 
+        # Read the setting from session_state
         include_trash = False
         try:
             import streamlit as st
@@ -247,15 +231,15 @@ def scan_all_fast(email_address, password, imap_server, days_back=None):
             trash_folders = ['Trash', '[Gmail]/Trash', 'Deleted Items', 'Deleted Messages']
             for folder in results['folders']:
                 if any(trash_folder.lower() == folder.lower() for trash_folder in trash_folders):
-                    emails = scan_folder_fast(folder, email_address, password, imap_server, days_back)
+                    emails = scan_folder_fast(mail, folder, email_address, password, imap_server, days_back)
                     results['trash'].extend(emails)
 
         results['scan_time'] = time.time() - start_time
         return results
     finally:
         try:
-            mail_main_thread.close()
-            mail_main_thread.logout()
+            mail.close()
+            mail.logout()
         except:
             pass
 
@@ -265,13 +249,7 @@ def delete_emails(folder_type, emails, all_folders, permanent=False):
 
     mail = None
     try:
-        # If folder_type is 'spam', search for any spam/junk folder
-        if folder_type == 'spam':
-            spam_and_junk_folders = ['Spam', 'Junk', 'SPAM', 'JUNK', '[Gmail]/Spam', 'Bulk Mail', 'Spam E-mail']
-            target_folder = next((f for f in all_folders if any(target.lower() == f.lower() for target in spam_and_junk_folders)), None)
-        else: # For 'trash'
-            target_folder = next((f for f in all_folders if folder_type.lower() in f.lower()), None)
-
+        target_folder = next((f for f in all_folders if folder_type.lower() in f.lower()), None)
         if not target_folder:
             return 0
 
@@ -279,7 +257,7 @@ def delete_emails(folder_type, emails, all_folders, permanent=False):
         if not uids:
             return 0
 
-        mail = create_connection_for_thread(
+        mail = create_connection(
             emails[0].get('email_address'),
             emails[0].get('password'),
             emails[0].get('imap_server')
