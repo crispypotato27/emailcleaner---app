@@ -1,116 +1,286 @@
-import streamlit as st
-import json
-import os
-from util import load_session_state
+import imaplib
+import email
+from email.header import decode_header
+import concurrent.futures
+import time
+import ssl
+from datetime import datetime, timedelta
+import re
+import pytz
 
-def save_schedule_to_json(email, schedule_config):
-    os.makedirs("config", exist_ok=True)
-    user_config_path = f"config/schedule_{email.replace('@', '_at_')}.json"
-    with open(user_config_path, "w") as f:
-        json.dump(schedule_config, f, indent=4)
-    return user_config_path
+def create_connection(email_address, password, imap_server):
+    try:
+        context = ssl.create_default_context()
+        mail = imaplib.IMAP4_SSL(imap_server, 993, ssl_context=context)
+        mail.login(email_address, password)
+        return mail
+    except Exception as e:
+        print(f"Connection failed: {e}")
+        return None
 
-st.set_page_config(page_title="Schedule Clean Up", layout="wide")
-load_session_state()
+def decode_mime_words(s):
+    try:
+        decoded_parts = decode_header(s)
+        decoded_string = ""
+        for part, encoding in decoded_parts:
+            if isinstance(part, bytes):
+                decoded_string += part.decode(encoding or 'utf-8', errors='ignore')
+            else:
+                decoded_string += part
+        return decoded_string
+    except:
+        return str(s) if s else "Unknown"
 
-# 🔐 Auth
-if "logged_in" not in st.session_state or not st.session_state.logged_in:
-    st.error("You must log in first!")
-    st.stop()
+def parse_email_date(date_str):
+    if not date_str or date_str == "Unknown Date":
+        return None
+    try:
+        date_str = re.sub(r'\([A-Za-z]+\)', '', date_str)
+        date_str = re.sub(r'\s+', ' ', date_str).strip()
+        for fmt in (
+            '%a, %d %b %Y %H:%M:%S %z',
+            '%d %b %Y %H:%M:%S %z',
+            '%a, %d %b %Y %H:%M:%S',
+            '%d %b %Y %H:%M:%S'
+        ):
+            try:
+                return datetime.strptime(date_str, fmt)
+            except ValueError:
+                continue
+        return None
+    except Exception:
+        return None
 
-email = st.session_state.get("email", "user@example.com")
-st.markdown("## 🧹 Schedule Clean Up")
+def get_email_info_batch(mail_conn, msg_ids, cutoff_date=None):
+    emails = []
+    try:
+        msg_set = ','.join(mid.decode() if isinstance(mid, bytes) else str(mid) for mid in msg_ids)
+        typ, msg_data = mail_conn.fetch(msg_set, '(UID BODY.PEEK[HEADER.FIELDS (FROM SUBJECT DATE MESSAGE-ID)])')
 
-# 🔘 Enable/Disable Scheduled Cleanup
-enabled = st.toggle("🔘 Enable Scheduled Cleanup", value=False)
+        if typ != 'OK' or not msg_data:
+            print(f"Fetch failed or empty: {typ}, {msg_data}")
+            return []
 
-if enabled:
-    # 🔁 Frequency
-    frequency = st.radio(
-        "How often should the cleanup run?",
-        ["Every day", "Every Monday", "Every 1st of the Month", "Custom"],
-        index=0,
-        horizontal=True
-    )
+        for i in range(0, len(msg_data)):
+            item = msg_data[i]
+            if item is None or not isinstance(item, tuple) or len(item) < 2:
+                continue
 
-    custom_days = []
-    if frequency == "Custom":
-        st.markdown("#### 📅 Choose specific days of the week:")
-        days_of_week = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
-        custom_days = st.multiselect("Select days to run cleanup:", days_of_week)
+            try:
+                raw_header = item[0].decode() if isinstance(item[0], bytes) else str(item[0])
+                uid_match = re.search(r'UID (\d+)', raw_header)
+                uid = uid_match.group(1) if uid_match else None
 
-    # 🕒 Time Input
-    schedule_time = st.text_input("⏰ Setup Schedule Time (24hr format, HH:MM)", value="21:00")
+                email_message = email.message_from_bytes(item[1])
+                subject = decode_mime_words(email_message.get("Subject", "No Subject"))
+                sender = decode_mime_words(email_message.get("From", "Unknown Sender"))
+                date_str = email_message.get("Date", "Unknown Date")
+                email_date = parse_email_date(date_str)
 
-    # 🧹 What to Delete
-    delete_ui_to_internal = {
-        "Unread older than 7 days": "Unread Emails",
-        "Read older than 30 days": "Old Emails",
-        "Emails from subscriptions": "Subscription Emails",
-    }
+                if cutoff_date and email_date and email_date < cutoff_date:
+                    continue
 
-    delete_options_ui = st.multiselect(
-        "Select what you want to clean:",
-        list(delete_ui_to_internal.keys()),
-        default=["Unread older than 7 days"]
-    )
+                emails.append({
+                    'subject': subject[:200],
+                    'sender': sender[:200],
+                    'date': date_str,
+                    'message_id': email_message.get("Message-ID", "")[:100],
+                    'uid': uid,
+                    'datetime': email_date
+                })
 
-    # ♻️ Move to Trash
-    move_to_trash = st.checkbox("♻️ Move to Trash instead of deleting permanently", value=False)
+            except Exception as e:
+                print(f"Error processing item: {item} — {e}")
+                continue
 
-    # ✨ Separate Spam and Trash
-    include_spam = st.checkbox("🗑️ Include Spam", value=False)
-    include_trash = False
-    if not move_to_trash:
-        include_trash = st.checkbox("🧺 Include Trash", value=False)
+    except Exception as e:
+        print(f"Batch processing error: {e}")
+    return emails
 
-    # Build delete options
-    internal_options = [delete_ui_to_internal[o] for o in delete_options_ui]
-    if include_spam:
-        internal_options.append("Spam")
-    if include_trash:
-        internal_options.append("Trash")
+def process_chunk(args):
+    chunk, folder, email_address, password, imap_server, cutoff_date = args
+    mail_conn = create_connection(email_address, password, imap_server)
+    if not mail_conn:
+        return []
+    try:
+        mail_conn.select(folder)
+        return get_email_info_batch(mail_conn, chunk, cutoff_date)
+    finally:
+        try:
+            mail_conn.close()
+            mail_conn.logout()
+        except:
+            pass
 
-    # 📦 Build schedule config
-    schedule_config = {
-        "email": email,
-        "enabled": True,
-        "frequency": frequency,
-        "time": schedule_time,
-        "delete_options": internal_options,
-        "move_to_trash": move_to_trash,
-    }
-    if frequency == "Custom":
-        schedule_config["custom_days"] = custom_days
+def scan_folder_fast(mail, folder_name, email_address, password, imap_server, days_back=None):
+    try:
+        status, _ = mail.select(folder_name)
+        if status != 'OK':
+            return []
 
-    # 💾 Save config
-    path = save_schedule_to_json(email, schedule_config)
-    st.success(f"✅ Saved schedule config to `{path}`")
+        cutoff_date = None
+        if days_back is not None and isinstance(days_back, int):
+            pst = pytz.timezone('Asia/Manila')
+            cutoff_date = datetime.now(pst) - timedelta(days=days_back)
 
-    # 🧾 Preview Summary
-    st.markdown("### 📊 What Will Be Cleaned:")
-    for opt in delete_options_ui:
-        st.markdown(f"- ✅ {opt}")
-    if include_spam:
-        st.markdown("- 🧪 Spam")
-    if include_trash:
-        st.markdown("- 🧹 Trash")
+        _, msg_ids = mail.search(None, 'ALL')
+        msg_id_list = msg_ids[0].split()
+        if not msg_id_list:
+            return []
 
-    if frequency == "Custom":
-        custom_day_str = ", ".join(custom_days) if custom_days else "No days selected"
-        st.info(f"📅 Scheduled: Custom on {custom_day_str} at {schedule_time}")
-    else:
-        st.info(f"📅 Scheduled: {frequency} at {schedule_time}")
-else:
-    # Save minimal config with enabled: False
-    schedule_config = {
-        "email": email,
-        "enabled": False
-    }
-    path = save_schedule_to_json(email, schedule_config)
-    st.warning("⚠️ Scheduled cleanup is currently disabled. No cleanup will run.")
-    st.caption(f"(Saved config path: `{path}`)")
+        chunk_size = 25
+        chunks = [msg_id_list[i:i + chunk_size] for i in range(0, len(msg_id_list), chunk_size)]
+        all_emails = []
 
-# 🔙 Back to settings
-if st.button("Back to Clean Up Settings"):
-    st.switch_page("pages/CleanUpSettings.py")
+        with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
+            args = [(chunk, folder_name, email_address, password, imap_server, cutoff_date) for chunk in chunks]
+            for future in concurrent.futures.as_completed([executor.submit(process_chunk, arg) for arg in args]):
+                all_emails.extend(future.result())
+
+        for e in all_emails:
+            e["email_address"] = email_address
+            e["password"] = password
+            e["imap_server"] = imap_server
+
+        return all_emails
+    except Exception as e:
+        print(f"Error scanning {folder_name}: {e}")
+        return []
+
+def scan_unread_fast(mail, email_address, password, imap_server, cutoff_date=None):
+    try:
+        mail.select('INBOX')
+        search_criteria = 'UNSEEN'
+        if cutoff_date:
+            date_str = cutoff_date.strftime('%d-%b-%Y')
+            search_criteria = f'(UNSEEN SINCE "{date_str}")'
+        _, msg_ids = mail.search(None, search_criteria)
+        if not msg_ids[0]:
+            return [], 0
+
+        msg_id_list = msg_ids[0].split()
+        total_unread = len(msg_id_list)
+
+        chunk_size = 25
+        chunks = [msg_id_list[i:i + chunk_size] for i in range(0, len(msg_id_list), chunk_size)]
+        all_emails = []
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
+            args = [(chunk, 'INBOX', email_address, password, imap_server, cutoff_date) for chunk in chunks]
+            for future in concurrent.futures.as_completed([executor.submit(process_chunk, arg) for arg in args]):
+                all_emails.extend(future.result())
+
+        for e in all_emails:
+            e["email_address"] = email_address
+            e["password"] = password
+            e["imap_server"] = imap_server
+
+        return all_emails, total_unread
+    except Exception as e:
+        print(f"Error scanning unread emails: {e}")
+        return [], 0
+
+def get_folder_list(mail):
+    try:
+        _, folders = mail.list()
+        return [folder.decode().split('"')[-2] for folder in folders if len(folder.decode().split('"')) >= 3]
+    except Exception as e:
+        print(f"Error getting folder list: {e}")
+        return []
+
+def scan_all_fast(email_address, password, imap_server, days_back=None):
+    start_time = time.time()
+    mail = create_connection(email_address, password, imap_server)
+    if not mail:
+        return None
+
+    try:
+        results = {
+            'unread': [], 'spam': [], 'junk': [], 'trash': [], 'folders': [],
+            'total_unread_count': 0, 'scan_time': 0
+        }
+
+        cutoff_date = None
+        if days_back is not None and isinstance(days_back, int):
+            pst = pytz.timezone('Asia/Manila')
+            cutoff_date = datetime.now(pst) - timedelta(days=days_back)
+
+        results['folders'] = get_folder_list(mail)
+        results['unread'], results['total_unread_count'] = scan_unread_fast(
+            mail, email_address, password, imap_server, cutoff_date
+        )
+
+        spam_folders = ['Spam', 'Junk', 'SPAM', 'JUNK', '[Gmail]/Spam', 'Bulk Mail']
+        for folder in results['folders']:
+            if any(spam_folder.lower() == folder.lower() for spam_folder in spam_folders):
+                emails = scan_folder_fast(mail, folder, email_address, password, imap_server, days_back)
+                if 'spam' in folder.lower():
+                    results['spam'].extend(emails)
+                else:
+                    results['junk'].extend(emails)
+
+        # Read the setting from session_state
+        include_trash = False
+        try:
+            import streamlit as st
+            include_trash = st.session_state.get("include_trash", True)
+        except:
+            pass
+
+        if include_trash:
+            trash_folders = ['Trash', '[Gmail]/Trash', 'Deleted Items', 'Deleted Messages']
+            for folder in results['folders']:
+                if any(trash_folder.lower() == folder.lower() for trash_folder in trash_folders):
+                    emails = scan_folder_fast(mail, folder, email_address, password, imap_server, days_back)
+                    results['trash'].extend(emails)
+
+        results['scan_time'] = time.time() - start_time
+        return results
+    finally:
+        try:
+            mail.close()
+            mail.logout()
+        except:
+            pass
+
+def delete_emails(folder_type, emails, all_folders, permanent=False):
+    if not emails:
+        return 0
+
+    mail = None
+    try:
+        target_folder = next((f for f in all_folders if folder_type.lower() in f.lower()), None)
+        if not target_folder:
+            return 0
+
+        uids = [email['uid'] for email in emails if email.get('uid')]
+        if not uids:
+            return 0
+
+        mail = create_connection(
+            emails[0].get('email_address'),
+            emails[0].get('password'),
+            emails[0].get('imap_server')
+        )
+        if not mail:
+            return 0
+
+        mail.select(target_folder)
+        for i in range(0, len(uids), 50):
+            batch = uids[i:i+50]
+            mail.uid('STORE', ','.join(batch), '+FLAGS', '\\Deleted')
+
+        if permanent:
+            mail.expunge()
+
+        return len(uids)
+    except Exception as e:
+        print(f"Error deleting emails: {e}")
+        return 0
+    finally:
+        if mail:
+            try:
+                mail.close()
+                mail.logout()
+            except:
+                pass
