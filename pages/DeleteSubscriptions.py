@@ -64,6 +64,9 @@ if "subscriptions" not in st.session_state:
 subs = st.session_state.subscriptions
 updated_subs = []
 
+if not subs:
+    st.info("✅ No subscriptions detected.")
+
 for sub in subs:
     col1, col2, col3 = st.columns([2, 4, 2])
     with col1:
